@@ -10,7 +10,6 @@ func TestPhase1(t *testing.T) {
   resultSampleBlock := []uint32 {0, 16, 27};
   resultLocalBlock := []uint32 {0, 1, 2, 9, 16, 17, 24, 25, 27, 28, 30, 33};
 
-
   n := uint32(36);
   p := uint32(3);
   w := n / (p * p) ;
@@ -80,4 +79,17 @@ func TestBinarySearch(t *testing.T) {
   }
 }
 
+func TestPhase4(t *testing.T) {
+  partition1 := []uint32 {1, 2, 3, 4, 5, 6, 7};
+  partition2 := []uint32 {5, 5, 5};
+  partition3 := []uint32 {1, 23, 27};
 
+  outputSize := len(partition1) + len(partition2) + len(partition3);
+  output := make([]uint32, outputSize);
+
+  phase4(output, partition1, partition2, partition3);
+
+  if !slices.IsSorted(output) || len(output) != outputSize {
+    t.Errorf("Phase 4 output list not sorted or of incorrect length")
+  }
+}
