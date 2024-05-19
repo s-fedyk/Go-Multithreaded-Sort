@@ -6,27 +6,109 @@ import (
 	"sync"
 )
 
-var wg = sync.WaitGroup{}
+type Job struct {
+  sample []uint32;
+  w uint32;
+  p uint32;
+  pivots []uint32;
+  gatheredSample []uint32;
+  partitions [][]uint32;
+  wg1 *sync.WaitGroup;
+  wg2 *sync.WaitGroup;
+  wg3 *sync.WaitGroup;
+  wg4 *sync.WaitGroup;
+}
 
-func psrs(list []uint32, p int) {
-  /*
-  leftOver := len(list) % p;
-  offset := 0
+func psrs(list []uint32, p uint32, destination []uint32) {
+  // this is stupid but GO doesn't seem to have a barrier?
+  var wg1 = sync.WaitGroup{};
+  var wg2 = sync.WaitGroup{};
+  var wg3 = sync.WaitGroup{};
+  var wg4 = sync.WaitGroup{};
+
+  n := uint32(len(list));
+  w := uint32(n / (p * p));
+
+  leftOver := n % p;
+  sampleSize := n / p;
+
+  gatheredSample := make([]uint32, p*p);
+  pivots := make([]uint32, p-1);
+  partitions := make([][]uint32, p*p);
+
+  wg1.Add(int(p));
+  wg2.Add(1);
+  wg3.Add(int(p));
+  wg4.Add(int(p));
+
+  var mainThreadJob Job;
 
   for i := range(p) {
-    sampleAdjust := 0;
-    if i > leftOver {
+    // if we want to take extras
+    sampleAdjust := uint32(0);
+    if leftOver & i > leftOver {
       sampleAdjust = 1;
     }
 
-    sampleAdjust = i > leftOver ? 1 : 0;
-
+    // if we want to adjust the start because we took extras
+    startAdjust := uint32(0);
+    if leftOver & i > 0 {
+      startAdjust = min(i, leftOver)
+    }
+      
+      start := i * sampleSize + startAdjust;
+      finish := i * sampleSize + sampleSize + sampleAdjust;
+      threadJob := Job{list[start: finish],
+        w,
+        p, 
+        pivots, 
+        gatheredSample[i*p:i*p+p],
+        partitions[p*i:p*i+p],
+        &wg1,
+        &wg2,
+        &wg3,
+        &wg4}
+    if i < p-1 {
+      go workerJob(threadJob);
+    } else {
+      mainThreadJob = threadJob 
+    }
   }
-  */
+  phase1(mainThreadJob.sample, 
+    mainThreadJob.gatheredSample, 
+    mainThreadJob.w, 
+    mainThreadJob.p, 
+    mainThreadJob.wg1);
+
+  wg1.Wait();
+
+  phase2(&gatheredSample, pivots, p, &wg2);
+  wg2.Wait();
+
+  phase3(mainThreadJob.sample, pivots, mainThreadJob.partitions, mainThreadJob.wg3);
+
+  wg3.Wait();
+
+  phase4(destination, partitions...);
 }
 
-func phase1(localSample []uint32, sampleDest []uint32, w uint32, p uint32) {
-  
+func workerJob(job Job) { 
+  // witing for phase 1 to finish
+  phase1(job.sample, job.gatheredSample, job.w, job.p, job.wg1);
+  job.wg1.Wait();
+
+  // waiting for main thread to finish phase2
+  job.wg2.Wait();
+
+  phase3(job.sample,job.pivots, job.partitions, job.wg3);
+
+  job.wg3.Wait();
+
+}
+
+func phase1(localSample []uint32, sampleDest []uint32, w uint32, p uint32, wg *sync.WaitGroup) {
+  defer wg.Done();
+
   sort.Slice(localSample, func(i, j int) bool {
     return localSample[i] < localSample[j]
   });
@@ -36,38 +118,34 @@ func phase1(localSample []uint32, sampleDest []uint32, w uint32, p uint32) {
   }
 }
 
-func phase2(gatheredSample *[]uint32, p uint32) *[]uint32 {
-  pivots := make([]uint32, p-1);
+func phase2(gatheredSample *[]uint32, pivots []uint32, p uint32, wg *sync.WaitGroup) {
+  defer wg.Done();
 
   sort.Slice(*gatheredSample, func(i, j int) bool {
-    return (*gatheredSample)[i] < (*gatheredSample)[j]
+    return (*gatheredSample)[i] < (*gatheredSample)[j];
   });
 
   for i := range(pivots) {
-    pivots[i] = (*gatheredSample)[int(p) + i * int(p)]
+    pivots[i] = (*gatheredSample)[int(p) + i * int(p)];
   }
-
-  return &pivots;
 }
 
-func phase3(localSample *[]uint32, pivots []uint32) *[][]uint32 {
-  partitions := make([][]uint32, len(pivots) + 1);
+func phase3(localSample []uint32, pivots []uint32, partitions [][]uint32, wg *sync.WaitGroup) {
+  defer wg.Done();
   sampleStart := localSample;
 
   // partition[i] contains all elements in the local sample less than pivots[i]
   for partitionIndex := range(pivots) {
-    index := BinarySearch(sampleStart, pivots[partitionIndex])
+    index := BinarySearch(sampleStart, pivots[partitionIndex]);
 
-    partitions[partitionIndex] = (*sampleStart)[:index]
+    partitions[partitionIndex] = sampleStart[:index];
  
     // cut down search space, next pivot is bigger.
-    (*sampleStart) = (*sampleStart)[index:]
+    sampleStart = sampleStart[index:];
   }
 
   // the last partition contains everything else
-  partitions[len(pivots)] = (*sampleStart)
-
-  return &partitions
+  partitions[len(pivots)] = sampleStart;
 }
 
 func phase4(destination []uint32, partitions ...[]uint32) {
